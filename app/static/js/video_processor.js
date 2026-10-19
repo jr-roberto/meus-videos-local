@@ -305,14 +305,24 @@
     }
 
     $('list').addEventListener('click', async (e) => {
+
         const btn = e.target.closest('[data-action]');
+
         if (!btn) return;
+
         const action = btn.dataset.action;
+
         if (action === 'go-form') { showView('form'); return; }
+
         const id = btn.closest('.item').dataset.id;
-        const v = videos.find((x) => x.id === id);
+        const v = videos.find((x) => String(x.id) === String(id));
+        console.log(v)
+        
         if (!v) return;
+
         $('mgr-error').hidden = true;
+
+        console.log(action)
 
         if (action === 'remove') {
             if (!btn.classList.contains('armed')) { // 1º clique pede confirmação
