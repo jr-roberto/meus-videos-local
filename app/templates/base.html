@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{% block title %}Meus vídeos{% endblock %}</title>
+  <script>
+    // Aplica o tema salvo antes da renderização para evitar "piscar"
+    try { document.documentElement.dataset.theme = localStorage.getItem('theme') || 'dark'; } catch { }
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/video_processor.css') }}">
+  {% block head %}{% endblock %}
+</head>
+
+<body>
+  {% block body %}{% endblock %}
+  {% block scripts %}{% endblock %}
+</body>
+
+</html>

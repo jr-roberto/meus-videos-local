@@ -1,44 +1,8 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
+{% extends "base.html" %}
 
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/video_processor.css') }}">
-  <title>Processar vídeo do YouTube</title>
+{% block title %}Meus vídeos{% endblock %}
 
-  <style>
-
-  .container {
-        background-color: var(--card-bg);
-        padding: .5rem;
-        border-radius: 12px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        text-align: center;
-      }
-
-      /* 3. Estilo do botão de alternância */
-      .theme-btn {
-        background-color: var(--button-bg);
-        color: var(--button-text);
-        border: none;
-        padding: 10px 20px;
-        font-size: .8rem;
-        border-radius: 6px;
-        cursor: pointer;
-        font-weight: bold;
-        transition: transform 0.2s;
-      }
-
-      .theme-btn:hover {
-        transform: scale(1.05);
-      }
-
-  </style>
-
-</head>
-
-<body>
+{% block body %}
   <div class="app">
     <nav class="side" aria-label="Principal">
       <div class="brand">
@@ -49,10 +13,6 @@
 
 
       </div>
-
-    <div class="container">
-      <button id="themeToggle" class="theme-btn">☀️ Mudar para Light</button>
-    </div>
 
       <div class="nav">
         <button type="button" class="nav-btn is-active" data-view="form" aria-current="page">
@@ -72,11 +32,13 @@
           <span class="count" id="nav-count">0</span>
         </button>
       </div>
+
+      <button type="button" id="themeToggle" class="theme-btn">Mudar tema</button>
     </nav>
     <div class="content">
       <main class="view" id="view-form">
         <h1>Cole o link do vídeo.</h1>
-        <p class="lead">Informe o endereço de um vídeo do YouTube e nós enviamos para processamento.</p>
+        <p class="lead">Informe o endereço de um vídeo do YouTube e ele entra na fila de download.</p>
 
         <form id="form" novalidate>
           <label for="url" class="sr-only">Endereço do vídeo do YouTube</label>
@@ -98,7 +60,7 @@
             </button>
             <button type="submit" class="submit" id="submit" disabled>
               <span class="spinner" id="spinner" hidden aria-hidden="true"></span>
-              <span id="label">Processar vídeo</span>
+              <span id="label">Adicionar à fila</span>
             </button>
           </div>
 
@@ -135,52 +97,36 @@
           <button type="button" class="ghost" id="refresh">Atualizar</button>
         </div>
         <div class="toolbar">
-          <input type="search" id="search" placeholder="Buscar por ID do vídeo ou do pedido" aria-label="Buscar vídeos"
+          <input type="search" id="search" placeholder="Buscar por título, canal ou ID do vídeo" aria-label="Buscar vídeos"
             autocomplete="off">
           <div class="chips" id="chips" role="group" aria-label="Filtrar por status">
             <button type="button" class="chip" data-filter="all" aria-pressed="true">Todos<span>0</span></button>
             <button type="button" class="chip" data-filter="FILA" aria-pressed="false">Na fila<span>0</span></button>
-            <button type="button" class="chip" data-filter="BAIXANDO" aria-pressed="false">Processando<span>0</span></button>
+            <button type="button" class="chip" data-filter="BAIXANDO" aria-pressed="false">Baixando<span>0</span></button>
             <button type="button" class="chip" data-filter="CONCLUIDO" aria-pressed="false">Concluídos<span>0</span></button>
             <button type="button" class="chip" data-filter="ERRO" aria-pressed="false">Falhas<span>0</span></button>
+            <button type="button" class="chip" data-filter="CANCELADO" aria-pressed="false">Cancelados<span>0</span></button>
           </div>
         </div>
-        <div class="msg error" id="mgr-error" role="alert" hidden style="margin-bottom:12px"></div>
+        <div class="msg error mgr-error" id="mgr-error" role="alert" hidden></div>
         <ul class="list" id="list"></ul>
       </section>
     </div>
   </div>
 
+  <dialog class="player" id="player" aria-labelledby="player-title">
+    <div class="player-head">
+      <h2 id="player-title"></h2>
+      <button type="button" class="icon-btn" id="player-close" aria-label="Fechar player" title="Fechar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M18 6 6 18M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+    <video id="player-video" controls preload="metadata"></video>
+  </dialog>
+{% endblock %}
+
+{% block scripts %}
   <script src="{{ url_for('static', filename='js/video_processor.js') }}"></script>
-  <script>
-    const themeToggleBtn = document.getElementById('themeToggle');
-    const htmlElement = document.documentElement;
-
-    // Recupera a preferência salva no localStorage (se existir)
-    const savedTheme = localStorage.getItem('theme') || 'dark';
-    htmlElement.setAttribute('data-theme', savedTheme);
-    updateButtonText(savedTheme);
-
-    // Função para alternar o tema
-    themeToggleBtn.addEventListener('click', () => {
-      const currentTheme = htmlElement.getAttribute('data-theme');
-      const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-
-      htmlElement.setAttribute('data-theme', newTheme);
-      localStorage.setItem('theme', newTheme); // Salva a preferência
-      updateButtonText(newTheme);
-    });
-
-    // Atualiza o texto/ícone do botão
-    function updateButtonText(theme) {
-      if (theme === 'dark') {
-        themeToggleBtn.textContent = '☀️ Mudar para Light';
-      } else {
-        themeToggleBtn.textContent = '🌙 Mudar para Dark';
-      }
-    }
-  </script>
-
-</body>
-
-</html>
+{% endblock %}

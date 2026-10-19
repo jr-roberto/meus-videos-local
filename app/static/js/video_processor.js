@@ -3,9 +3,8 @@
 
     // ── Configuração ────────────────────────────────────────────
     const ENDPOINT = '/api/process-video';
-    // true = simula a resposta do servidor (útil sem back-end).
-    // Em produção, defina como false para disparar o POST real.
-    const SIMULATE = false;
+    const LIST_ENDPOINT = '/api/videos'; // GET lista, DELETE /:id, POST /:id/reprocess, GET /:id/arquivo
+    const POLL_MS = 5000; // atualização automática enquanto há vídeos pendentes
 
     // ── Elementos ───────────────────────────────────────────────
     const $ = (id) => document.getElementById(id);
@@ -14,6 +13,21 @@
     const pasteBtn = $('paste'), clearBtn = $('clear');
     const errBox = $('error'), errText = $('error-text');
     const okBox = $('ok'), okText = $('ok-text');
+
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    // ── Tema ────────────────────────────────────────────────────
+    const themeBtn = $('themeToggle');
+    function updateThemeButton() {
+        themeBtn.textContent = document.documentElement.dataset.theme === 'dark' ? '☀️ Tema claro' : '🌙 Tema escuro';
+    }
+    themeBtn.addEventListener('click', () => {
+        const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        document.documentElement.dataset.theme = next;
+        try { localStorage.setItem('theme', next); } catch { }
+        updateThemeButton();
+    });
+    updateThemeButton();
 
     // ── Validação ───────────────────────────────────────────────
     const ID_RE = /^[A-Za-z0-9_-]{11}$/;
@@ -54,7 +68,6 @@
     };
 
     // ── Estados de UI ───────────────────────────────────────────
-    let touched = false;
     let busy = false;
 
     function show(box, textEl, text) {
@@ -67,7 +80,7 @@
         const result = parseYouTube(input.value);
         clearBtn.hidden = !input.value || busy;
         pasteBtn.hidden = !!input.value || busy;
-        submitBtn.disabled = busy ? false : !result.ok;
+        submitBtn.disabled = busy || !result.ok;
 
         field.classList.remove('is-invalid', 'is-valid');
         input.setAttribute('aria-invalid', 'false');
@@ -75,7 +88,7 @@
 
         if (result.ok) {
             field.classList.add('is-valid');
-            if (!busy) { okBox.hidden = false; okText.innerHTML = 'Vídeo reconhecido: <code>' + result.id + '</code>'; }
+            if (!busy) { okBox.hidden = false; okText.innerHTML = 'Vídeo reconhecido: <code>' + esc(result.id) + '</code>'; }
         } else if (showErrors && input.value.trim()) {
             okBox.hidden = true;
             field.classList.add('is-invalid');
@@ -93,52 +106,50 @@
         spinner.hidden = !on;
         submitBtn.classList.toggle('is-loading', on);
         submitBtn.setAttribute('aria-busy', String(on));
-        submitBtn.disabled = on ? true : submitBtn.disabled;
-        label.textContent = on ? 'Enviando…' : 'Processar vídeo';
+        if (on) submitBtn.disabled = true;
+        label.textContent = on ? 'Enviando…' : 'Adicionar à fila';
     }
 
-    // ── Eventos ─────────────────────────────────────────────────
+    // ── Eventos do formulário ───────────────────────────────────
     let timer;
     input.addEventListener('input', () => {
         clearTimeout(timer);
         render(false);
         // valida em tempo real após uma pausa na digitação
-        timer = setTimeout(() => { touched = true; render(true); }, 600);
+        timer = setTimeout(() => render(true), 600);
     });
-    input.addEventListener('blur', () => { touched = true; render(true); });
+    input.addEventListener('blur', () => render(true));
 
     clearBtn.addEventListener('click', () => {
-        input.value = ''; touched = false; render(false); input.focus();
+        input.value = ''; render(false); input.focus();
     });
 
     pasteBtn.addEventListener('click', async () => {
         try {
-            const text = await navigator.clipboard.readText();
-            input.value = text.trim();
+            input.value = (await navigator.clipboard.readText()).trim();
         } catch {
             input.focus(); // sem permissão: o usuário cola manualmente
             return;
         }
-        touched = true; render(true); input.focus();
+        render(true); input.focus();
     });
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
         if (busy) return;
-        touched = true;
         const result = render(true);
         if (!result.ok) { input.focus(); return; }
 
         setLoading(true);
         clearMessages();
         try {
-            const data = await sendVideo(result.url, result.id);
-            addVideo(data, result);
-            okBox.hidden = false;
-            okText.innerHTML = '<strong>Vídeo enviado.</strong> Pedido <code>' + esc(data.jobId) + '</code> recebido. <a href="#" data-go="manager">Ver em Gerenciar vídeos</a>';
-            input.disabled = false;
-            input.value = ''; touched = false;
+            const { data, worker } = await sendVideo(result.url);
+            upsertVideo(data);
+            input.value = '';
             field.classList.remove('is-valid');
+            okBox.hidden = false;
+            okText.innerHTML = '<strong>Vídeo adicionado à fila.</strong> Pedido <code>#' + esc(data.id) + '</code>. ' +
+                esc(WORKER_MSG[worker] || '') + ' <a href="#" data-go="manager">Ver em Gerenciar vídeos</a>';
         } catch (err) {
             field.classList.add('is-invalid');
             show(errBox, errText, err.message || 'Não foi possível enviar agora. Tente novamente em instantes.');
@@ -150,57 +161,43 @@
         }
     });
 
-    // ── Envio ao servidor ───────────────────────────────────────
-    async function sendVideo(url, videoId) {
-        if (SIMULATE) {
-            await new Promise((r) => setTimeout(r, 1600));
-            return { jobId: 'job_' + Math.random().toString(36).slice(2, 8), videoId };
-        }
-
+    // ── Comunicação com o servidor ──────────────────────────────
+    async function request(method, url, body) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 15000);
         try {
-            const res = await fetch(ENDPOINT, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                body: JSON.stringify({ url, videoId }),
+            const res = await fetch(url, {
+                method,
+                headers: { Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+                body: body ? JSON.stringify(body) : undefined,
                 signal: controller.signal,
             });
-
             const data = await res.json().catch(() => ({}));
-
-            if (!res.ok) {
-                throw new Error(
-                    data.detail ||
-                    data.message ||
-                    'O servidor recusou o envio (código ' + res.status + ').'
-                );
-            }
-
+            if (!res.ok) throw new Error(data.detail || 'O servidor respondeu com erro ' + res.status + '.');
             return data;
-
-            // if (!res.ok) {
-            //     let detail = '';
-            //     try { detail = (await res.json()).message || '';} catch { }
-            //     throw new Error(res.json().detail || 'O servidor recusou o envio (código ' + res.status + ').');
-            // }
-            // return await res.json(); // esperado: { jobId: "..." }
-
         } catch (err) {
             if (err.name === 'AbortError') throw new Error('O servidor demorou para responder. Tente novamente.');
-            if (err instanceof TypeError) throw new Error('Sem conexão com o servidor. Verifique sua internet.');
+            if (err instanceof TypeError) throw new Error('Sem conexão com o servidor.');
             throw err;
         } finally {
             clearTimeout(timeout);
         }
     }
 
+    const sendVideo = (url) => request('POST', ENDPOINT, { url });
+    const WORKER_MSG = {
+        iniciado: 'O download vai começar em instantes.',
+        em_execucao: 'O worker já está trabalhando e vai baixá-lo na sequência.',
+        falhou: 'Não foi possível iniciar o worker automaticamente; rode python worker.py.',
+    };
+
     // ── Navegação lateral ───────────────────────────────────────
-    const LIST_ENDPOINT = '/api/videos'; // GET lista, DELETE /:id, POST /:id/reprocess
     const views = { form: $('view-form'), manager: $('view-manager') };
     const navBtns = document.querySelectorAll('.nav-btn');
+    let currentView = 'form';
 
     function showView(name) {
+        currentView = name;
         for (const k in views) views[k].hidden = k !== name;
         navBtns.forEach((b) => {
             const on = b.dataset.view === name;
@@ -216,130 +213,147 @@
     });
 
     // ── Gerenciador de vídeos ───────────────────────────────────
-    const STATUS = { queued: 'Na fila', processing: 'Processando', done: 'Concluído', error: 'Falhou' };
-    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const STATUS = { FILA: 'Na fila', BAIXANDO: 'Baixando', CANCELANDO: 'Cancelando…', CONCLUIDO: 'Concluído', ERRO: 'Falhou', CANCELADO: 'Cancelado' };
+    const PENDING = new Set(['FILA', 'BAIXANDO', 'CANCELANDO']);
+    const RETRYABLE = new Set(['ERRO', 'CANCELADO']);
+
     const ago = (ts) => {
+        if (!ts) return '';
         const m = Math.round((Date.now() - ts) / 60000);
         if (m < 1) return 'agora mesmo';
         if (m < 60) return 'há ' + m + ' min';
         const h = Math.round(m / 60);
         return h < 24 ? 'há ' + h + ' h' : 'há ' + Math.round(h / 24) + ' d';
     };
-    const t0 = Date.now();
-    let videos = SIMULATE ? [
-        { id: 'job_k3m9x1', videoId: 'aB3dE5fG7hI', status: 'done', at: t0 - 5 * 3600e3 },
-        { id: 'job_p7q2w8', videoId: 'Zx9Yw8Vu7Ts', status: 'processing', at: t0 - 4 * 60e3 },
-        { id: 'job_r5t1n6', videoId: 'Kq1Lm2Np3Rt', status: 'error', at: t0 - 26 * 3600e3 },
-    ] : [];
+    const duration = (s) => {
+        if (!s) return '';
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(Math.floor(s % 60)).padStart(2, '0');
+        return h ? h + ':' + String(m).padStart(2, '0') + ':' + sec : m + ':' + sec;
+    };
+
+    let videos = [];
     let filter = 'all', query = '';
+    let pollTimer = null;
 
-    async function api(method, url) {
-        const res = await fetch(url, { method, headers: { Accept: 'application/json' } });
-        if (!res.ok) throw new Error('O servidor respondeu com erro ' + res.status + '.');
-        return res.status === 204 ? null : res.json();
-    }
-    function mgrError(text) { const b = $('mgr-error'); b.textContent = text; b.hidden = false; }
+    const fromApi = (v) => ({ ...v, at: v.recebidoEm ? new Date(v.recebidoEm).getTime() : null });
 
-    function simulateProgress(v) {
-        setTimeout(() => { v.status = 'processing'; renderManager(); }, 1500);
-        setTimeout(() => { v.status = 'done'; renderManager(); }, 5000);
-    }
-
-    function addVideo(data, result) {
-        const v = { id: data.jobId || 'job_' + result.id.slice(0, 6), videoId: result.id, status: 'queued', at: Date.now() };
-        videos.unshift(v);
-        if (SIMULATE) simulateProgress(v);
+    function upsertVideo(data) {
+        const v = fromApi(data);
+        const i = videos.findIndex((x) => x.id === v.id);
+        if (i >= 0) videos[i] = v; else videos.unshift(v);
         renderManager();
     }
 
-    async function loadVideos() {
-        $('mgr-error').hidden = true;
-        if (!SIMULATE) {
-            const btn = $('refresh');
-            btn.disabled = true; btn.textContent = 'Atualizando…';
-            try {
-                const data = await api('GET', LIST_ENDPOINT);
-                videos = data.map((v) => ({ id: v.id, videoId: v.videoId, status: v.status, at: new Date(v.receivedAt).getTime(), title: v.titulo_video }));
-            } catch (err) {
-                mgrError('Não foi possível carregar os vídeos. ' + err.message);
-            } finally {
-                btn.disabled = false; btn.textContent = 'Atualizar';
-            }
+    function mgrError(text) { const b = $('mgr-error'); b.textContent = text; b.hidden = false; }
+
+    async function loadVideos({ silent = false } = {}) {
+        const btn = $('refresh');
+        if (!silent) { $('mgr-error').hidden = true; btn.disabled = true; btn.textContent = 'Atualizando…'; }
+        try {
+            videos = (await request('GET', LIST_ENDPOINT)).map(fromApi);
+        } catch (err) {
+            if (!silent) mgrError('Não foi possível carregar os vídeos. ' + err.message);
+        } finally {
+            if (!silent) { btn.disabled = false; btn.textContent = 'Atualizar'; }
         }
         renderManager();
     }
 
+    function schedulePoll() {
+        clearTimeout(pollTimer);
+        if (currentView === 'manager' && videos.some((v) => PENDING.has(v.status))) {
+            pollTimer = setTimeout(() => loadVideos({ silent: true }), POLL_MS);
+        }
+    }
+
+    function renderItem(v) {
+        const title = v.titulo || 'Aguardando informações do vídeo…';
+        const meta = [v.canal, duration(v.duracao), 'Pedido #' + v.id, 'recebido ' + ago(v.at)].filter(Boolean).join(' · ');
+        const playable = v.status === 'CONCLUIDO' && v.temArquivo;
+        return '<li class="item" data-id="' + esc(v.id) + '">' +
+            '<div class="thumb" aria-hidden="true">' +
+            (v.videoId ? '<img src="https://i.ytimg.com/vi/' + encodeURIComponent(v.videoId) + '/mqdefault.jpg" alt="" loading="lazy">' : '') +
+            '</div>' +
+            '<div style="min-width:0"><div class="item-title" title="' + esc(title) + '">' + esc(title) + '</div>' +
+            '<div class="item-meta">' + esc(meta) + '</div>' +
+            (v.status === 'ERRO' && v.erro ? '<div class="item-error" title="' + esc(v.erro) + '">' + esc(v.erro) + '</div>' : '') +
+            '</div>' +
+            '<span class="badge ' + esc(v.status) + '">' + esc(STATUS[v.status] || v.status) + '</span>' +
+            '<div class="actions">' +
+            (playable ? '<button type="button" class="act primary" data-action="play">Assistir</button>' : '') +
+            '<a class="act" href="' + esc(v.url) + '" target="_blank" rel="noopener noreferrer">YouTube</a>' +
+            (v.status === 'FILA' || v.status === 'BAIXANDO' ? '<button type="button" class="act danger" data-action="cancel">Cancelar</button>' : '') +
+            (RETRYABLE.has(v.status) ? '<button type="button" class="act" data-action="retry">' + (v.status === 'ERRO' ? 'Tentar de novo' : 'Baixar de novo') + '</button>' : '') +
+            (v.status !== 'BAIXANDO' && v.status !== 'CANCELANDO' ? '<button type="button" class="act danger" data-action="remove">Remover</button>' : '') +
+            '</div>' +
+            '</li>';
+    }
+
     function renderManager() {
-        const counts = { all: videos.length, FILA: 0, BAIXANDO: 0, CONCLUIDO: 0, ERRO: 0 };
+        const counts = { all: videos.length, FILA: 0, BAIXANDO: 0, CONCLUIDO: 0, ERRO: 0, CANCELADO: 0 };
         videos.forEach((v) => { if (v.status in counts) counts[v.status]++; });
         document.querySelectorAll('.chip').forEach((c) => {
             c.setAttribute('aria-pressed', String(c.dataset.filter === filter));
             c.querySelector('span').textContent = counts[c.dataset.filter];
         });
         $('nav-count').textContent = videos.length;
-        $('mgr-sub').textContent = videos.length + (videos.length === 1 ? ' vídeo recebido' : ' vídeos recebidos') + ' pelo servidor.';
+        $('mgr-sub').textContent = videos.length + (videos.length === 1 ? ' vídeo na biblioteca.' : ' vídeos na biblioteca.');
 
         const q = query.trim().toLowerCase();
         const rows = videos.filter((v) => (filter === 'all' || v.status === filter) &&
-            (!q || v.videoId.toLowerCase().includes(q) || v.id.toLowerCase().includes(q)));
+            (!q || [v.titulo, v.canal, v.videoId, String(v.id)].some((s) => s && s.toLowerCase().includes(q))));
         const list = $('list');
 
-        if (!rows.length) {
-            list.innerHTML = '<li class="empty">' + (videos.length
+        list.innerHTML = rows.length ? rows.map(renderItem).join('') :
+            '<li class="empty">' + (videos.length
                 ? '<p>Nenhum vídeo corresponde a esse filtro.</p>'
                 : '<p>Nenhum vídeo recebido ainda.</p><button type="button" class="ghost" data-action="go-form">Enviar um link</button>') + '</li>';
-            return;
-        }
-        list.innerHTML = rows.map((v) =>
-            '<li class="item" data-id="' + esc(v.id) + '">' +
-            '<div class="thumb" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></div>' +
-            '<div style="min-width:0"><div class="item-title">Vídeo ' + esc(v.title) + '</div>' +
-            '<div class="item-meta">Pedido ' + esc(v.id) + ', recebido ' + ago(v.at) + '</div></div>' +
-            '<span class="badge ' + esc(v.status) + '">' + (STATUS[v.status] || esc(v.status)) + '</span>' +
-            '<div class="actions">' +
-            '<a class="act" href="https://www.youtube.com/watch?v=' + encodeURIComponent(v.videoId) + '" target="_blank" rel="noopener noreferrer">Abrir</a>' +
-            (v.status === 'error' ? '<button type="button" class="act" data-action="retry">Tentar de novo</button>' : '') +
-            '<button type="button" class="act danger" data-action="remove">Remover</button>' +
-            '</div>' +
-            '</li>').join('');
+
+        schedulePoll();
     }
 
     $('list').addEventListener('click', async (e) => {
-
         const btn = e.target.closest('[data-action]');
-
         if (!btn) return;
 
         const action = btn.dataset.action;
-
         if (action === 'go-form') { showView('form'); return; }
 
-        const id = btn.closest('.item').dataset.id;
-        const v = videos.find((x) => String(x.id) === String(id));
-        console.log(v)
-        
+        const id = Number(btn.closest('.item').dataset.id);
+        const v = videos.find((x) => x.id === id);
         if (!v) return;
 
         $('mgr-error').hidden = true;
 
-        console.log(action)
+        if (action === 'play') {
+            openPlayer(v);
+            return;
+        }
+
+        if ((action === 'remove' || action === 'cancel') && !btn.classList.contains('armed')) { // 1º clique pede confirmação
+            const original = btn.textContent;
+            btn.classList.add('armed'); btn.textContent = action === 'remove' ? 'Confirmar remoção' : 'Confirmar cancelamento';
+            setTimeout(() => { if (btn.isConnected) { btn.classList.remove('armed'); btn.textContent = original; } }, 3000);
+            return;
+        }
 
         if (action === 'remove') {
-            if (!btn.classList.contains('armed')) { // 1º clique pede confirmação
-                btn.classList.add('armed'); btn.textContent = 'Confirmar remoção';
-                setTimeout(() => { if (btn.isConnected) { btn.classList.remove('armed'); btn.textContent = 'Remover'; } }, 3000);
-                return;
-            }
             btn.disabled = true;
             try {
-                if (!SIMULATE) await api('DELETE', LIST_ENDPOINT + '/' + encodeURIComponent(id));
+                await request('DELETE', LIST_ENDPOINT + '/' + id);
                 videos = videos.filter((x) => x.id !== id);
             } catch (err) { mgrError('Não foi possível remover o vídeo. ' + err.message); }
-        } else if (action === 'retry') {
+        } else if (action === 'cancel') {
+            btn.disabled = true;
             try {
-                if (!SIMULATE) await api('POST', LIST_ENDPOINT + '/' + encodeURIComponent(id) + '/reprocess');
-                v.status = 'queued';
-                if (SIMULATE) simulateProgress(v);
+                const { data } = await request('POST', LIST_ENDPOINT + '/' + id + '/cancel');
+                Object.assign(v, fromApi(data));
+            } catch (err) { mgrError('Não foi possível cancelar o download. ' + err.message); }
+        } else if (action === 'retry') {
+            btn.disabled = true;
+            try {
+                const { data } = await request('POST', LIST_ENDPOINT + '/' + id + '/reprocess');
+                Object.assign(v, fromApi(data));
             } catch (err) { mgrError('Não foi possível reenviar o vídeo. ' + err.message); }
         }
         renderManager();
@@ -350,8 +364,21 @@
         if (c) { filter = c.dataset.filter; renderManager(); }
     });
     $('search').addEventListener('input', (e) => { query = e.target.value; renderManager(); });
-    $('refresh').addEventListener('click', loadVideos);
+    $('refresh').addEventListener('click', () => loadVideos());
+
+    // ── Player ──────────────────────────────────────────────────
+    const player = $('player'), playerVideo = $('player-video');
+
+    function openPlayer(v) {
+        $('player-title').textContent = v.titulo || 'Vídeo #' + v.id;
+        playerVideo.src = LIST_ENDPOINT + '/' + v.id + '/arquivo';
+        player.showModal();
+        playerVideo.play().catch(() => { });
+    }
+    $('player-close').addEventListener('click', () => player.close());
+    player.addEventListener('click', (e) => { if (e.target === player) player.close(); });
+    player.addEventListener('close', () => { playerVideo.pause(); playerVideo.removeAttribute('src'); playerVideo.load(); });
 
     render(false);
-    renderManager();
+    loadVideos({ silent: true }); // preenche o contador da navegação
 })();
