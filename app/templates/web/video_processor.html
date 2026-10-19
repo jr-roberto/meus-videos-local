@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/video_processor.css') }}">
+  <title>Processar vídeo do YouTube</title>
+
+  <style>
+
+  .container {
+        background-color: var(--card-bg);
+        padding: .5rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        text-align: center;
+      }
+
+      /* 3. Estilo do botão de alternância */
+      .theme-btn {
+        background-color: var(--button-bg);
+        color: var(--button-text);
+        border: none;
+        padding: 10px 20px;
+        font-size: .8rem;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: bold;
+        transition: transform 0.2s;
+      }
+
+      .theme-btn:hover {
+        transform: scale(1.05);
+      }
+
+  </style>
+
+</head>
+
+<body>
+  <div class="app">
+    <nav class="side" aria-label="Principal">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5v14l11-7z" />
+          </svg></span>
+        Painel de vídeos
+
+
+      </div>
+
+    <div class="container">
+      <button id="themeToggle" class="theme-btn">☀️ Mudar para Light</button>
+    </div>
+
+      <div class="nav">
+        <button type="button" class="nav-btn is-active" data-view="form" aria-current="page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+            stroke-linejoin="round" aria-hidden="true">
+            <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1 1" />
+            <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1-1" />
+          </svg>
+          Enviar link
+        </button>
+        <button type="button" class="nav-btn" data-view="manager">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+            stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+          </svg>
+          Gerenciar vídeos
+          <span class="count" id="nav-count">0</span>
+        </button>
+      </div>
+    </nav>
+    <div class="content">
+      <main class="view" id="view-form">
+        <h1>Cole o link do vídeo.</h1>
+        <p class="lead">Informe o endereço de um vídeo do YouTube e nós enviamos para processamento.</p>
+
+        <form id="form" novalidate>
+          <label for="url" class="sr-only">Endereço do vídeo do YouTube</label>
+          <div class="field" id="field">
+            <input id="url" name="url" type="url" inputmode="url" autocomplete="off" autocapitalize="off"
+              spellcheck="false" placeholder="https://www.youtube.com/watch?v=…" aria-describedby="feedback"
+              aria-invalid="false">
+            <button type="button" class="icon-btn" id="paste" aria-label="Colar da área de transferência" title="Colar">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round">
+                <rect x="8" y="3" width="8" height="4" rx="1" />
+                <path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" />
+              </svg>
+            </button>
+            <button type="button" class="icon-btn" id="clear" aria-label="Limpar campo" title="Limpar" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+            <button type="submit" class="submit" id="submit" disabled>
+              <span class="spinner" id="spinner" hidden aria-hidden="true"></span>
+              <span id="label">Processar vídeo</span>
+            </button>
+          </div>
+
+          <div class="feedback" id="feedback" role="status" aria-live="polite">
+            <div class="msg error" id="error" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 8v5M12 16.5v.01" />
+              </svg>
+              <span id="error-text"></span>
+            </div>
+            <div class="msg ok" id="ok" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9" />
+                <path d="m8.5 12.5 2.5 2.5 4.5-5" />
+              </svg>
+              <span id="ok-text"></span>
+            </div>
+          </div>
+        </form>
+
+        <p class="hint">Aceitamos links como <code>youtube.com/watch?v=…</code>, <code>youtu.be/…</code> e
+          <code>youtube.com/shorts/…</code>.</p>
+      </main>
+
+      <section class="view wide" id="view-manager" aria-labelledby="mgr-title" hidden>
+        <div class="mgr-head">
+          <div>
+            <h1 id="mgr-title">Vídeos recebidos</h1>
+            <p class="lead" id="mgr-sub"></p>
+          </div>
+          <button type="button" class="ghost" id="refresh">Atualizar</button>
+        </div>
+        <div class="toolbar">
+          <input type="search" id="search" placeholder="Buscar por ID do vídeo ou do pedido" aria-label="Buscar vídeos"
+            autocomplete="off">
+          <div class="chips" id="chips" role="group" aria-label="Filtrar por status">
+            <button type="button" class="chip" data-filter="all" aria-pressed="true">Todos<span>0</span></button>
+            <button type="button" class="chip" data-filter="FILA" aria-pressed="false">Na fila<span>0</span></button>
+            <button type="button" class="chip" data-filter="BAIXANDO" aria-pressed="false">Processando<span>0</span></button>
+            <button type="button" class="chip" data-filter="CONCLUIDO" aria-pressed="false">Concluídos<span>0</span></button>
+            <button type="button" class="chip" data-filter="ERRO" aria-pressed="false">Falhas<span>0</span></button>
+          </div>
+        </div>
+        <div class="msg error" id="mgr-error" role="alert" hidden style="margin-bottom:12px"></div>
+        <ul class="list" id="list"></ul>
+      </section>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/video_processor.js') }}"></script>
+  <script>
+    const themeToggleBtn = document.getElementById('themeToggle');
+    const htmlElement = document.documentElement;
+
+    // Recupera a preferência salva no localStorage (se existir)
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    htmlElement.setAttribute('data-theme', savedTheme);
+    updateButtonText(savedTheme);
+
+    // Função para alternar o tema
+    themeToggleBtn.addEventListener('click', () => {
+      const currentTheme = htmlElement.getAttribute('data-theme');
+      const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+      htmlElement.setAttribute('data-theme', newTheme);
+      localStorage.setItem('theme', newTheme); // Salva a preferência
+      updateButtonText(newTheme);
+    });
+
+    // Atualiza o texto/ícone do botão
+    function updateButtonText(theme) {
+      if (theme === 'dark') {
+        themeToggleBtn.textContent = '☀️ Mudar para Light';
+      } else {
+        themeToggleBtn.textContent = '🌙 Mudar para Dark';
+      }
+    }
+  </script>
+
+</body>
+
+</html>
