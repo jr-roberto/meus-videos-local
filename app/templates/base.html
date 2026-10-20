@@ -4,12 +4,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>{% block title %}Meus vídeos{% endblock %}</title>
+  <title>Mênia - {% block title %}Meus vídeos{% endblock %}</title>
   <script>
     // Aplica o tema salvo antes da renderização para evitar "piscar"
     try { document.documentElement.dataset.theme = localStorage.getItem('theme') || 'dark'; } catch { }
   </script>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/video_processor.css') }}">
+  <link rel="icon" type="image/x-icon" href="https://cdn-icons-png.flaticon.com/128/12402/12402385.png">
   {% block head %}{% endblock %}
 </head>
 
